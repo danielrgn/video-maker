@@ -1,20 +1,32 @@
 const algorithmia = require("algorithmia");
-const algorithmiaApiKey = require("../credentials/algorithmia.json");
+const algorithmiaApiKey = require("../credentials/algorithmia.json").apiKey;
 const sbd = require('sbd')
+
+const watsonApiKey = require('../credentials/watson-nlu.json').apikey
+const NaturalLanguageUnderstandingV1 = require('watson-developer-cloud/natural-language-understanding/v1.js')
+
+var nlu = new NaturalLanguageUnderstandingV1({
+    iam_apikey: watsonApiKey,
+    version: '2018-04-05',
+    url: 'https://gateway.watsonplatform.net/natural-language-understanding/api/'
+})
 
 async function robot(content) {
     await fetchContentFromWikipedia(content)
     sanitizeContent(content)
     breakContentIntoSentences(content)
+    limitMaxSentences(content)
+    await fetchKeywordsOfAllSentences(content)
 
     async function fetchContentFromWikipedia(content) {
-        const algorithmiaAuthenticated = algorithmia(algorithmiaApiKey.apiKey);
+        const algorithmiaAuthenticated = algorithmia(algorithmiaApiKey);
         const wikipediaAlgoritm = algorithmiaAuthenticated.algo(
           "web/WikipediaParser/0.1.2?timeout=300"
         );
-        const wikipediaResponse = await wikipediaAlgoritm.pipe(
-          content.searchTerm
-        );
+        const wikipediaResponse = await wikipediaAlgoritm.pipe({
+            "lang": content.lang,
+            "articleName": content.searchTerm
+        });
         const wikipediaContent = wikipediaResponse.get()
         
         content.sourceContentOriginal = wikipediaContent.content
@@ -30,12 +42,9 @@ async function robot(content) {
         function removeBlankLinesAndMarkdown(text) {
           const allLines = text.split("\n");
 
-          const withoutBlankLinesAndMarkdown = allLines.filter(line => {
-            if (line.trim().length === 0 || line.trim().startsWith('=')) {
-              return false;
-            }
-            return true;
-          });
+          const withoutBlankLinesAndMarkdown = allLines.filter(
+            line => line.trim() && !line.trim().startsWith('=')
+          );
 
           return withoutBlankLinesAndMarkdown.join(' ');
         }
@@ -55,6 +64,35 @@ async function robot(content) {
                 images: []
             })
         })
+    }
+
+    function limitMaxSentences(content) {
+        content.sentences = content.sentences.slice(0, content.maximumSentences)
+    }
+
+    async function fetchKeywordsOfAllSentences(content) {
+        for (const sentence of content.sentences) {
+            sentence.keywords = await fetchWatsonAndReturnKeywords(sentence.text)
+        }
+    }
+
+    async function fetchWatsonAndReturnKeywords(sentece) {
+        return new Promise((resolve, reject) => {
+            nlu.analyze({
+                text: sentece,
+                features: {
+                    keywords: {}
+                }
+            }, (error, response) => {
+                if (error) {
+                    throw error
+                }
+
+                const keywords = response.keywords.map(keyword => keyword.text)
+                resolve(keywords)
+            })
+        })
+        
     }
 }
 
